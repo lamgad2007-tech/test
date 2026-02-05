@@ -1,0 +1,1156 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Score - نتائج مباشرة</title>
+    <!-- استدعاء Tailwind CSS للتصميم -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- استدعاء مكتبة Socket.io -->
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&family=Roboto+Mono&display=swap');
+        body { font-family: 'Cairo', sans-serif; }
+        .live-indicator { animation: pulse 1.5s infinite; }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        /* For welcome message */
+        #welcome-text.typing::after {
+            content: '█';
+            animation: blink 1s step-end infinite;
+            color: #22c55e; /* green-500 */
+            margin-right: 0.25rem;
+        }
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+    </style>
+</head>
+<body class="bg-black text-white min-h-screen bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-gray-900 via-black to-black selection:bg-green-500 selection:text-black">
+
+    <!-- Welcome Overlay -->
+    <div id="welcome-overlay" class="fixed inset-0 z-[100] flex flex-col items-center justify-center transition-opacity duration-1000 bg-cover bg-center" style="background-image: url('https://images.pexels.com/photos/46798/the-ball-stadion-football-the-pitch-46798.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=1');">
+        <!-- طبقة معتمة لتحسين القراءة -->
+        <div class="absolute inset-0 bg-black/75 backdrop-blur-sm"></div>
+
+        <p id="welcome-text" class="relative z-10 text-2xl md:text-4xl font-bold text-green-500 text-center px-4 font-mono min-h-[40px]"></p>
+        <button id="start-button" class="relative z-10 mt-8 bg-green-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-green-700 transition-all duration-300 text-lg shadow-lg shadow-green-900/40 animate-pulse">
+            ابدأ
+        </button>
+        <audio id="typing-sound" src="typing.mp3" loop class="relative z-10"></audio>
+        <audio id="goal-sound" src="goal_sound.mp3"></audio> <!-- صوت الهدف -->
+    </div>
+
+    <!-- الهيدر -->
+    <header class="bg-black/50 backdrop-blur-md p-4 shadow-2xl border-b border-white/10 sticky top-0 z-40">
+        <div class="container mx-auto flex justify-between items-center">
+            <div class="flex items-center gap-4">
+                <h1 class="text-2xl font-bold text-green-500 hidden md:block">⚽test</h1>
+                <h1 class="text-xl font-bold text-green-500 md:hidden">⚽</h1>
+                
+                <!-- شريط البحث -->
+                <div class="relative">
+                    <input type="text" id="team-search" placeholder="ابحث عن فريق..." class="bg-white/10 border border-white/10 text-white text-sm rounded-full px-4 py-1.5 focus:outline-none focus:ring-2 focus:ring-green-500/50 w-40 md:w-64 transition-all placeholder-gray-500" oninput="handleSearchInput(this.value)" onkeydown="handleSearchEnter(event, this.value)">
+                    <!-- نتائج البحث المنسدلة -->
+                    <div id="search-results-dropdown" class="absolute top-full right-0 w-full bg-gray-900/95 backdrop-blur-xl border border-white/10 rounded-lg shadow-2xl mt-2 hidden z-50 max-h-60 overflow-y-auto"></div>
+                </div>
+            </div>
+            <div id="connection-status" class="text-xs px-2 py-1 rounded bg-red-500 whitespace-nowrap">غير متصل</div>
+        </div>
+    </header>
+
+    <!-- محتوى المباريات -->
+    <main class="container mx-auto p-4 mt-6">
+        <div id="main-controls" class="flex justify-between items-center mb-4">
+            <div class="flex items-center gap-4">
+                <h2 id="league-title" class="text-xl border-r-4 border-green-500 pr-3">الدوري الإنجليزي الممتاز</h2>
+                <button onclick="refreshMatches()" class="text-sm bg-white/5 hover:bg-white/10 text-white px-3 py-1 rounded border border-white/10 transition backdrop-blur-sm flex items-center gap-2"><span>🔄</span> تحديث</button>
+                <button onclick="openStandings()" class="text-sm bg-white/5 hover:bg-white/10 text-white px-3 py-1 rounded border border-white/10 transition backdrop-blur-sm">📊 جدول الترتيب</button>
+                <button onclick="openTopScorers()" class="text-sm bg-white/5 hover:bg-white/10 text-white px-3 py-1 rounded border border-white/10 transition backdrop-blur-sm">⚽ الهدافين</button>
+            </div>
+            
+            <div>
+                <select id="league-selector" class="bg-white/10 border border-white/10 text-white text-sm rounded-lg focus:ring-green-500/50 focus:border-green-500 block w-full p-2.5 backdrop-blur-sm [&>option]:bg-black">
+                    <option value="ALL">كل الدوريات</option>
+                    <option value="PL" selected>الدوري الإنجليزي</option>
+                    <option value="PD">الدوري الإسباني</option>
+                    <option value="BL1">الدوري الألماني</option>
+                    <option value="FL1">الدوري الفرنسي</option>
+                    <option value="SA">الدوري الإيطالي</option>
+                    <option value="CL">دوري أبطال أوروبا</option>
+                    <option value="ELC">دوري البطولة الإنجليزية</option>
+                    <option value="DED">الدوري الهولندي</option>
+                    <option value="PPL">الدوري البرتغالي</option>
+                    <option value="BSA">الدوري البرازيلي</option>
+                </select>
+            </div>
+        </div>
+        
+        <!-- تبويبات التصفية -->
+        <div id="filter-tabs" class="flex justify-center mb-6 gap-2 text-sm md:text-base">
+            <button id="tab-all" onclick="setFilter('ALL')" class="px-4 py-2 rounded-lg bg-green-600 text-white font-bold transition shadow-lg shadow-green-900/20">الكل</button>
+            <button id="tab-live" onclick="setFilter('LIVE')" class="px-4 py-2 rounded-lg bg-white/5 border border-white/5 text-gray-300 hover:bg-white/10 transition backdrop-blur-sm">مباشر</button>
+            <button id="tab-ft" onclick="setFilter('FT')" class="px-4 py-2 rounded-lg bg-white/5 border border-white/5 text-gray-300 hover:bg-white/10 transition backdrop-blur-sm">منتهية</button>
+            <button id="tab-upcoming" onclick="setFilter('UPCOMING')" class="px-4 py-2 rounded-lg bg-white/5 border border-white/5 text-gray-300 hover:bg-white/10 transition backdrop-blur-sm">قادمة</button>
+        </div>
+
+        <div id="matches-container" class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <!-- سيتم إدراج المباريات هنا تلقائياً بواسطة الجافاسكربت -->
+            <div class="text-center text-gray-500 col-span-full">جاري تحميل النتائج...</div>
+        </div>
+
+        <!-- صفحة تفاصيل الفريق (مخفية افتراضياً) -->
+        <div id="team-page" class="hidden">
+            <button onclick="closeTeamPage()" class="mb-4 flex items-center text-green-400 hover:text-green-300 transition">
+                <span class="text-2xl ml-2">←</span> عودة للمباريات
+            </button>
+            
+            <h3 class="text-xl font-bold mb-4 border-r-4 border-blue-500 pr-3">المباريات القادمة</h3>
+            <div id="team-upcoming-container" class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 mb-8">
+                <div class="text-gray-500">جاري التحميل...</div>
+            </div>
+
+            <h3 class="text-xl font-bold mb-4 border-r-4 border-gray-500 pr-3">آخر النتائج</h3>
+            <div id="team-finished-container" class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <div class="text-gray-500">جاري التحميل...</div>
+            </div>
+        </div>
+
+        <!-- صفحة جدول الترتيب (مخفية افتراضياً) -->
+        <div id="standings-page" class="hidden">
+            <div class="flex justify-between items-center mb-4">
+                <button onclick="closeStandings()" class="flex items-center text-green-400 hover:text-green-300 transition">
+                    <span class="text-2xl ml-2">←</span> عودة للمباريات
+                </button>
+                <button onclick="refreshStandings()" class="text-sm bg-white/10 hover:bg-white/20 text-white px-3 py-1 rounded border border-white/10 transition backdrop-blur-sm flex items-center gap-2">
+                    <span>🔄</span> تحديث
+                </button>
+            </div>
+            
+            <div class="overflow-x-auto bg-white/5 backdrop-blur-md rounded-xl shadow-2xl border border-white/10">
+                <table class="w-full text-sm text-right text-gray-400">
+                    <thead class="text-xs text-gray-300 uppercase bg-black/40">
+                        <tr>
+                            <th scope="col" class="px-4 py-3">#</th>
+                            <th scope="col" class="px-4 py-3">الفريق</th>
+                            <th scope="col" class="px-4 py-3 text-center">لعب</th>
+                            <th scope="col" class="px-4 py-3 text-center">ف</th>
+                            <th scope="col" class="px-4 py-3 text-center">ت</th>
+                            <th scope="col" class="px-4 py-3 text-center">خ</th>
+                            <th scope="col" class="px-4 py-3 text-center">+/-</th>
+                            <th scope="col" class="px-4 py-3 text-center">نقاط</th>
+                        </tr>
+                    </thead>
+                    <tbody id="standings-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- صفحة تفاصيل اللاعب (مخفية افتراضياً) -->
+        <div id="player-page" class="hidden">
+            <button onclick="closePlayerPage()" class="mb-4 flex items-center text-green-400 hover:text-green-300 transition">
+                <span class="text-2xl ml-2">←</span> عودة للقائمة
+            </button>
+            
+            <div class="bg-white/5 backdrop-blur-md rounded-xl shadow-2xl border border-white/10 p-8 flex flex-col md:flex-row items-center gap-8 relative overflow-hidden">
+                <!-- خلفية جمالية -->
+                <div class="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-green-500/10 to-transparent pointer-events-none"></div>
+
+                <!-- صورة اللاعب -->
+                <div class="relative z-10">
+                    <img id="player-image" src="" class="w-32 h-32 rounded-full border-4 border-green-500 object-cover shadow-lg bg-gray-800">
+                    <div id="player-shirt-number" class="absolute -bottom-2 -right-2 bg-black text-white font-bold w-10 h-10 flex items-center justify-center rounded-full border-2 border-green-500 hidden"></div>
+                </div>
+                
+                <!-- معلومات اللاعب -->
+                <div class="flex-1 text-center md:text-right space-y-4 z-10">
+                    <h2 id="player-name" class="text-3xl font-bold text-white"></h2>
+                    <div class="flex flex-wrap justify-center md:justify-start gap-4">
+                        <div class="bg-white/10 px-4 py-2 rounded-lg border border-white/5">
+                            <span class="block text-xs text-gray-400 mb-1">المركز</span>
+                            <span id="player-position" class="font-bold text-green-400"></span>
+                        </div>
+                        <div class="bg-white/10 px-4 py-2 rounded-lg border border-white/5">
+                            <span class="block text-xs text-gray-400 mb-1">العمر</span>
+                            <span id="player-age" class="font-bold text-white"></span>
+                        </div>
+                        <div class="bg-white/10 px-4 py-2 rounded-lg border border-white/5">
+                            <span class="block text-xs text-gray-400 mb-1">الجنسية</span>
+                            <span id="player-nationality" class="font-bold text-white"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- إحصائيات الموسم (من القائمة) -->
+                <div class="bg-black/40 p-6 rounded-xl border border-white/10 min-w-[150px] text-center z-10 backdrop-blur-sm">
+                    <div class="text-5xl font-black text-green-500 mb-2 drop-shadow-lg" id="player-goals"></div>
+                    <div class="text-sm text-gray-300 font-bold">أهداف هذا الموسم</div>
+                    <div class="mt-3 pt-3 border-t border-white/10">
+                        <span id="player-assists" class="font-bold text-white text-xl"></span> <span class="text-xs text-gray-500">صناعة</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- صفحة الهدافين (مخفية افتراضياً) -->
+        <div id="top-scorers-page" class="hidden">
+            <button onclick="closeTopScorers()" class="mb-4 flex items-center text-green-400 hover:text-green-300 transition">
+                <span class="text-2xl ml-2">←</span> عودة للمباريات
+            </button>
+            
+            <div class="overflow-x-auto bg-white/5 backdrop-blur-md rounded-xl shadow-2xl border border-white/10">
+                <table class="w-full text-sm text-right text-gray-400">
+                    <thead class="text-xs text-gray-300 uppercase bg-black/40">
+                        <tr>
+                            <th scope="col" class="px-4 py-3">#</th>
+                            <th scope="col" class="px-4 py-3">اللاعب</th>
+                            <th scope="col" class="px-4 py-3">الفريق</th>
+                            <th scope="col" class="px-4 py-3 text-center">أهداف</th>
+                            <th scope="col" class="px-4 py-3 text-center">صناعة</th>
+                        </tr>
+                    </thead>
+                    <tbody id="top-scorers-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const socket = io();
+
+        // --- Welcome Animation ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const welcomeOverlay = document.getElementById('welcome-overlay');
+            const welcomeTextEl = document.getElementById('welcome-text');
+            const startButton = document.getElementById('start-button');
+            const welcomeMessage = "مرحباً بك في الموقع لمتابعة أحداث المباريات";
+            
+            // Check if the animation has been played in this session
+            if (sessionStorage.getItem('welcomeShown')) {
+                welcomeOverlay.style.display = 'none';
+                return;
+            }
+
+            // تأكد من أن النص فارغ في البداية
+            welcomeTextEl.innerHTML = '';
+
+            function typeWriter(text, i, onComplete) {
+                if (i < text.length) {
+                    welcomeTextEl.innerHTML = text.substring(0, i + 1);
+                    setTimeout(() => { typeWriter(text, i + 1, onComplete); }, 100); // Typing speed
+                } else if (typeof onComplete === 'function') {
+                    welcomeTextEl.classList.remove('typing'); // Remove cursor
+                    // إيقاف الصوت عند انتهاء الكتابة
+                    const audio = document.getElementById('typing-sound');
+                    if (audio) {
+                        audio.pause();
+                        audio.currentTime = 0;
+                    }
+                    setTimeout(onComplete, 1500); // Wait after typing
+                }
+            }
+
+            // Function to start animation after user interaction (required for audio)
+            const startAnimation = () => {
+                // إخفاء الزر عند بدء الكتابة
+                if (startButton) {
+                    startButton.style.display = 'none';
+                }
+                
+                // تشغيل ملف الصوت
+                const audio = document.getElementById('typing-sound');
+                if (audio) {
+                    audio.volume = 0.6; // مستوى الصوت
+                    audio.play().catch(e => console.log("Audio play failed:", e));
+                }
+
+                welcomeTextEl.classList.add('typing');
+                typeWriter(welcomeMessage, 0, () => {
+                    setTimeout(() => {
+                        welcomeOverlay.style.opacity = '0';
+                        setTimeout(() => { welcomeOverlay.style.display = 'none'; sessionStorage.setItem('welcomeShown', 'true'); }, 1000);
+                    }, 1000);
+                });
+            };
+
+            // ربط الحدث بالزر الجديد
+            if (startButton) {
+                startButton.addEventListener('click', startAnimation);
+            }
+        });
+
+        const container = document.getElementById('matches-container');
+        const statusBadge = document.getElementById('connection-status');
+        const leagueSelector = document.getElementById('league-selector');
+
+        let allMatches = [];
+        let previousScores = {}; // لتتبع تغير النتائج وتشغيل الصوت
+        let currentFilter = 'ALL';
+        let searchQuery = '';
+        let currentScorers = []; // لتخزين بيانات الهدافين
+
+        // استرجاع الدوري المحفوظ عند تحميل الصفحة
+        const savedLeague = localStorage.getItem('selectedLeague');
+        if (savedLeague) {
+            leagueSelector.value = savedLeague;
+        }
+
+        // مراقبة حالة الاتصال
+        socket.on('connect', () => {
+            statusBadge.textContent = 'متصل مباشر';
+            statusBadge.className = 'text-xs px-2 py-1 rounded bg-green-600';
+            
+            // طلب الدوري المحفوظ عند الاتصال لضمان عرض البيانات الصحيحة
+            if (savedLeague) {
+                socket.emit('change_league', savedLeague);
+            }
+        });
+
+        socket.on('disconnect', () => {
+            statusBadge.textContent = 'انقطع الاتصال';
+            statusBadge.className = 'text-xs px-2 py-1 rounded bg-red-600';
+        });
+
+        // استقبال تحديثات المباريات
+        socket.on('updateMatches', (matches) => {
+            // التحقق من تسجيل أهداف لتشغيل الصوت (ميزة 365scores)
+            let goalScored = false;
+            matches.forEach(match => {
+                const matchId = match.id;
+                const currentScore = (match.homeScore || 0) + (match.awayScore || 0);
+                
+                if (previousScores[matchId] !== undefined && currentScore > previousScores[matchId]) {
+                    goalScored = true;
+                }
+                previousScores[matchId] = currentScore;
+            });
+
+            if (goalScored) {
+                const goalAudio = document.getElementById('goal-sound');
+                if (goalAudio) goalAudio.play().catch(e => console.log('Autoplay blocked'));
+            }
+
+            allMatches = matches;
+            
+            if (allMatches.length === 0) {
+                container.innerHTML = '<div class="text-center text-gray-500 col-span-full">لا توجد مباريات حالياً في هذا الدوري.</div>';
+                return;
+            }
+
+            // تحديث عنوان الدوري
+            if (leagueSelector.value === 'ALL') {
+                document.getElementById('league-title').textContent = "جميع المباريات";
+            } else {
+                document.getElementById('league-title').textContent = allMatches[0].league;
+            }
+            
+            renderMatches();
+        });
+
+        function renderMatches() {
+            let filtered = allMatches;
+            if (currentFilter === 'LIVE') filtered = allMatches.filter(m => m.status === 'LIVE');
+            if (currentFilter === 'FT') filtered = allMatches.filter(m => m.status === 'FT');
+            if (currentFilter === 'UPCOMING') filtered = allMatches.filter(m => m.status !== 'LIVE' && m.status !== 'FT');
+
+            // تصفية حسب البحث المحلي
+            if (searchQuery) {
+                filtered = filtered.filter(m => m.home.toLowerCase().includes(searchQuery.toLowerCase()) || m.away.toLowerCase().includes(searchQuery.toLowerCase()));
+            }
+
+            container.innerHTML = ''; // مسح المحتوى القديم فقط عند وجود مباريات
+            
+            if (filtered.length === 0) {
+                container.innerHTML = '<div class="text-center text-gray-500 col-span-full">لا توجد مباريات في هذه القائمة.</div>';
+                return;
+            }
+
+            // دالة مساعدة لإنشاء بطاقة المباراة
+            const createMatchCard = (match) => {
+                const isLive = match.status === 'LIVE';
+                const timeClass = isLive ? 'text-green-400 live-indicator' : 'text-gray-400';
+                
+                let timeDisplay;
+                if (match.status === 'LIVE') {
+                    if (match.minute === 'HT') {
+                        timeDisplay = "استراحة";
+                    } else {
+                        timeDisplay = match.minute ? match.minute + "'" : "مباشر";
+                    }
+                } else if (match.status === 'FT') {
+                    timeDisplay = "FT";
+                } else {
+                    timeDisplay = `<span class="countdown-timer font-mono text-yellow-400 text-sm" data-timestamp="${match.utcDate}">...</span>`;
+                }
+                
+                // دالة رسم نقاط اللياقة
+                const renderFormDots = (form) => {
+                    return `<div class="flex gap-1 justify-center mt-2 opacity-80">
+                        ${form.map(r => `<span class="w-1.5 h-1.5 rounded-full ${r==='W'?'bg-green-500 shadow-[0_0_5px_theme(colors.green.500)]':(r==='D'?'bg-gray-500':'bg-red-500')}"></span>`).join('')}
+                    </div>`;
+                };
+
+                // شريط الزخم للمباريات المباشرة
+                const momentumBar = isLive ? `
+                    <div class="absolute bottom-4 left-0 w-full text-center pointer-events-none">
+                        <span class="text-[10px] text-gray-400 uppercase tracking-wider">سيطرة في المباراة</span>
+                    </div>
+                    <div class="absolute bottom-0 left-0 w-full h-1.5 flex" title="مؤشر الزخم">
+                        <div class="bg-green-500 opacity-70 h-full transition-all duration-1000 ease-in-out" style="width: ${match.momentum.home}%"></div>
+                        <div class="bg-blue-500 opacity-70 h-full transition-all duration-1000 ease-in-out" style="width: ${match.momentum.away}%"></div>
+                    </div>
+                ` : `
+                    <div class="absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-transparent via-green-500 to-transparent transform scale-x-0 group-hover:scale-x-100 transition-transform duration-500"></div>
+                `;
+
+                return `
+                <div onclick="openModal(${match.id})" class="bg-white/5 backdrop-blur-sm rounded-xl p-6 shadow-xl hover:shadow-green-900/20 hover:scale-[1.02] hover:border-green-500/50 cursor-pointer transition duration-500 border border-white/10 relative group overflow-hidden">
+                    <div class="text-xs text-gray-400 text-center mb-4 uppercase tracking-wider">${match.league}</div>
+                    
+                    <div class="flex justify-between items-center">
+                        <div class="text-center w-1/3 flex flex-col items-center cursor-pointer hover:opacity-80 transition group-hover:scale-110 duration-300" onclick="event.stopPropagation(); openTeamPage(${match.homeTeamId})">
+                            <img src="${match.homeLogo}" class="w-12 h-12 mb-2 object-contain drop-shadow-lg" alt="${match.home}">
+                            <div class="font-bold text-lg">${match.home}</div>
+                            ${renderFormDots(match.form.home)}
+                        </div>
+                        <div class="text-center w-1/3">
+                            <div class="text-3xl font-black bg-black/50 py-2 px-4 rounded-lg inline-block border border-white/10 shadow-inner">
+                                ${match.homeScore} - ${match.awayScore}
+                            </div>
+                            <div class="mt-2 text-sm font-mono ${timeClass}">
+                                ${timeDisplay}
+                            </div>
+                        </div>
+                        <div class="text-center w-1/3 flex flex-col items-center cursor-pointer hover:opacity-80 transition" onclick="event.stopPropagation(); openTeamPage(${match.awayTeamId})">
+                            <img src="${match.awayLogo}" class="w-12 h-12 mb-2 object-contain drop-shadow-lg" alt="${match.away}">
+                            <div class="font-bold text-lg">${match.away}</div>
+                            ${renderFormDots(match.form.away)}
+                        </div>
+                    </div>
+                    ${momentumBar}
+                </div>
+                `;
+            };
+
+            const isAllLeagues = document.getElementById('league-selector').value === 'ALL';
+
+            if (isAllLeagues) {
+                // تجميع المباريات حسب الدوري
+                const leagues = {};
+                filtered.forEach(match => {
+                    if (!leagues[match.league]) leagues[match.league] = [];
+                    leagues[match.league].push(match);
+                });
+
+                Object.keys(leagues).forEach(leagueName => {
+                    container.innerHTML += `
+                        <div class="col-span-full mt-6 mb-2 border-b border-white/10 pb-2 flex items-center gap-2">
+                             <div class="w-1 h-6 bg-green-500 rounded-full"></div>
+                             <h3 class="text-xl font-bold text-green-400">${leagueName}</h3>
+                        </div>
+                    `;
+                    leagues[leagueName].forEach(match => {
+                        container.innerHTML += createMatchCard(match);
+                    });
+                });
+            } else {
+                filtered.forEach(match => {
+                    container.innerHTML += createMatchCard(match);
+                });
+            }
+
+            // تحديث العدادات فوراً
+            updateCountdowns();
+        }
+
+        // --- دوال البحث ---
+        function handleSearchInput(query) {
+            searchQuery = query;
+            // تصفية المباريات المعروضة فوراً
+            renderMatches();
+            
+            // إخفاء القائمة المنسدلة إذا كان النص فارغاً
+            const dropdown = document.getElementById('search-results-dropdown');
+            if (!query) {
+                dropdown.classList.add('hidden');
+            }
+        }
+
+        function handleSearchEnter(event, query) {
+            if (event.key === 'Enter' && query.length > 2) {
+                // طلب بحث شامل من الخادم
+                const dropdown = document.getElementById('search-results-dropdown');
+                dropdown.innerHTML = '<div class="p-3 text-center text-gray-400 text-xs">جاري البحث في قاعدة البيانات...</div>';
+                dropdown.classList.remove('hidden');
+                socket.emit('search_team', query);
+            }
+        }
+
+        socket.on('search_team_results', (teams) => {
+            const dropdown = document.getElementById('search-results-dropdown');
+            dropdown.innerHTML = '';
+            
+            if (teams.length === 0) {
+                dropdown.innerHTML = '<div class="p-3 text-center text-gray-400 text-xs">لم يتم العثور على فرق</div>';
+            } else {
+                teams.forEach(team => {
+                    dropdown.innerHTML += `
+                        <div class="flex items-center gap-3 p-3 hover:bg-white/10 cursor-pointer transition border-b border-white/5 last:border-0" onclick="openTeamPage(${team.id}); document.getElementById('search-results-dropdown').classList.add('hidden');">
+                            <img src="${team.crest}" class="w-6 h-6 object-contain">
+                            <span class="text-sm font-bold">${team.shortName || team.name}</span>
+                        </div>
+                    `;
+                });
+            }
+            dropdown.classList.remove('hidden');
+        });
+
+        // --- دوال صفحة الفريق ---
+        function openTeamPage(teamId) {
+            if (!teamId) return;
+            
+            // إخفاء الرئيسية وإظهار صفحة الفريق
+            document.getElementById('matches-container').classList.add('hidden');
+            document.getElementById('main-controls').classList.add('hidden');
+            document.getElementById('filter-tabs').classList.add('hidden');
+            document.getElementById('standings-page').classList.add('hidden');
+            document.getElementById('top-scorers-page').classList.add('hidden');
+            document.getElementById('player-page').classList.add('hidden');
+            document.getElementById('team-page').classList.remove('hidden');
+            
+            // تفريغ المحتوى القديم
+            document.getElementById('team-upcoming-container').innerHTML = '<div class="text-center col-span-full text-gray-400">جاري جلب البيانات...</div>';
+            document.getElementById('team-finished-container').innerHTML = '<div class="text-center col-span-full text-gray-400">جاري جلب البيانات...</div>';
+
+            // طلب البيانات من الخادم
+            socket.emit('get_team_details', teamId);
+        }
+
+        function closeTeamPage() {
+            document.getElementById('team-page').classList.add('hidden');
+            document.getElementById('matches-container').classList.remove('hidden');
+            document.getElementById('main-controls').classList.remove('hidden');
+            document.getElementById('filter-tabs').classList.remove('hidden');
+        }
+
+        socket.on('team_details_response', (data) => {
+            const renderTeamMatches = (matches, containerId) => {
+                const container = document.getElementById(containerId);
+                container.innerHTML = '';
+                if (matches.length === 0) {
+                    container.innerHTML = '<div class="text-gray-500 col-span-full">لا توجد مباريات.</div>';
+                    return;
+                }
+                matches.forEach(match => {
+                    const date = new Date(match.utcDate);
+                    const dateStr = date.toLocaleDateString('en-GB', {day: '2-digit', month: '2-digit'});
+                    
+                    container.innerHTML += `
+                        <div class="bg-white/5 backdrop-blur-sm rounded-lg p-4 border border-white/10 flex justify-between items-center hover:bg-white/10 transition">
+                            <div class="flex flex-col items-center w-1/3">
+                                <img src="${match.homeLogo}" class="w-8 h-8 mb-1 object-contain">
+                                <span class="text-xs font-bold text-center">${match.home}</span>
+                            </div>
+                            <div class="flex flex-col items-center w-1/3">
+                                <span class="text-xs text-gray-400 mb-1">${dateStr}</span>
+                                <span class="bg-black/50 px-3 py-1 rounded font-bold border border-white/10">
+                                    ${match.status === 'SCHEDULED' ? 'VS' : match.homeScore + ' - ' + match.awayScore}
+                                </span>
+                            </div>
+                            <div class="flex flex-col items-center w-1/3">
+                                <img src="${match.awayLogo}" class="w-8 h-8 mb-1 object-contain">
+                                <span class="text-xs font-bold text-center">${match.away}</span>
+                            </div>
+                        </div>
+                    `;
+                });
+            };
+
+            renderTeamMatches(data.upcoming, 'team-upcoming-container');
+            renderTeamMatches(data.finished, 'team-finished-container');
+        });
+
+        // --- دوال جدول الترتيب ---
+        function openStandings() {
+            // إخفاء الصفحات الأخرى
+            document.getElementById('matches-container').classList.add('hidden');
+            document.getElementById('team-page').classList.add('hidden');
+            document.getElementById('filter-tabs').classList.add('hidden');
+            document.getElementById('top-scorers-page').classList.add('hidden');
+            document.getElementById('player-page').classList.add('hidden');
+            
+            // إظهار صفحة الترتيب
+            document.getElementById('standings-page').classList.remove('hidden');
+            
+            // طلب البيانات
+            const league = document.getElementById('league-selector').value;
+            document.getElementById('standings-body').innerHTML = '<tr><td colspan="8" class="text-center py-8">جاري تحميل الترتيب...</td></tr>';
+            socket.emit('get_standings', league);
+        }
+
+        function closeStandings() {
+            document.getElementById('standings-page').classList.add('hidden');
+            document.getElementById('matches-container').classList.remove('hidden');
+            document.getElementById('filter-tabs').classList.remove('hidden');
+        }
+
+        function refreshMatches() {
+            const currentLeague = document.getElementById('league-selector').value;
+            container.innerHTML = '<div class="text-center text-gray-500 col-span-full">جاري تحديث النتائج...</div>';
+            socket.emit('change_league', currentLeague);
+        }
+
+        function refreshStandings() {
+            const league = document.getElementById('league-selector').value;
+            const tbody = document.getElementById('standings-body');
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center py-8">جاري تحديث البيانات...</td></tr>';
+            socket.emit('get_standings', league);
+        }
+
+        socket.on('standings_response', (table) => {
+            const tbody = document.getElementById('standings-body');
+            tbody.innerHTML = '';
+            
+            table.forEach(row => {
+                let posClass = "text-white";
+                let rowStyle = "border-b border-white/5";
+                
+                if (row.position === 1) {
+                    posClass = "text-yellow-400 text-xl drop-shadow-md";
+                    rowStyle = "border-b border-yellow-500/30 bg-gradient-to-r from-yellow-500/10 to-transparent";
+                } else if (row.position === 2) {
+                    posClass = "text-gray-300 text-xl drop-shadow-md";
+                    rowStyle = "border-b border-gray-400/30 bg-gradient-to-r from-gray-500/10 to-transparent";
+                } else if (row.position === 3) {
+                    posClass = "text-amber-600 text-xl drop-shadow-md";
+                    rowStyle = "border-b border-orange-500/30 bg-gradient-to-r from-orange-500/10 to-transparent";
+                }
+
+                // تحديد أيقونة التغير
+                let trendIcon = '<span class="text-gray-600 text-[10px] ml-1">•</span>'; // ثبات
+                if (row.trend === 1) {
+                    trendIcon = '<span class="text-green-500 text-[10px] ml-1">▲</span>'; // صعود
+                } else if (row.trend === -1) {
+                    trendIcon = '<span class="text-red-500 text-[10px] ml-1">▼</span>'; // هبوط
+                }
+
+                const tr = `
+                    <tr class="${rowStyle} hover:bg-white/10 transition duration-300 cursor-default">
+                        <td class="px-4 py-3 font-bold ${posClass}"><div class="flex items-center justify-center gap-1">${row.position} ${trendIcon}</div></td>
+                        <td class="px-4 py-3 flex items-center gap-2 font-medium text-white cursor-pointer hover:text-green-400" onclick="openTeamPage(${row.team.id})">
+                            <img src="${row.team.crest}" class="w-6 h-6 object-contain"> ${row.team.shortName || row.team.name}
+                        </td>
+                        <td class="px-4 py-3 text-center">${row.playedGames}</td>
+                        <td class="px-4 py-3 text-center text-green-400">${row.won}</td>
+                        <td class="px-4 py-3 text-center text-yellow-400">${row.draw}</td>
+                        <td class="px-4 py-3 text-center text-red-400">${row.lost}</td>
+                        <td class="px-4 py-3 text-center" dir="ltr">${row.goalDifference > 0 ? '+' + row.goalDifference : row.goalDifference}</td>
+                        <td class="px-4 py-3 text-center font-bold text-white text-lg">${row.points || 0}</td>
+                    </tr>
+                `;
+                tbody.innerHTML += tr;
+            });
+        });
+
+        // --- دوال قائمة الهدافين ---
+        function openTopScorers() {
+            document.getElementById('matches-container').classList.add('hidden');
+            document.getElementById('team-page').classList.add('hidden');
+            document.getElementById('filter-tabs').classList.add('hidden');
+            document.getElementById('standings-page').classList.add('hidden');
+            document.getElementById('player-page').classList.add('hidden');
+
+            document.getElementById('top-scorers-page').classList.remove('hidden');
+
+            const league = document.getElementById('league-selector').value;
+            document.getElementById('top-scorers-body').innerHTML = '<tr><td colspan="5" class="text-center py-8">جاري تحميل الهدافين...</td></tr>';
+            socket.emit('get_top_scorers', league);
+        }
+
+        function closeTopScorers() {
+            document.getElementById('top-scorers-page').classList.add('hidden');
+            document.getElementById('matches-container').classList.remove('hidden');
+            document.getElementById('filter-tabs').classList.remove('hidden');
+        }
+
+        socket.on('top_scorers_response', (scorers) => {
+            currentScorers = scorers; // حفظ البيانات
+            const tbody = document.getElementById('top-scorers-body');
+            tbody.innerHTML = '';
+            
+            scorers.forEach((scorer, index) => {
+                const tr = `
+                    <tr class="border-b border-white/5 hover:bg-white/10 transition duration-300 cursor-default group">
+                        <td class="px-4 py-3 font-bold text-white">${index + 1}</td>
+                        <td class="px-4 py-3 font-medium text-white cursor-pointer hover:text-green-400 underline decoration-dotted underline-offset-4" onclick="openPlayerPage(${scorer.player.id})">${scorer.player.name}</td>
+                        <td class="px-4 py-3 flex items-center gap-2 cursor-pointer hover:text-green-400" onclick="openTeamPage(${scorer.team.id})">
+                            <img src="${scorer.team.crest}" class="w-6 h-6 object-contain"> ${scorer.team.shortName || scorer.team.name}
+                        </td>
+                        <td class="px-4 py-3 text-center font-bold text-green-400 text-lg">${scorer.goals}</td>
+                        <td class="px-4 py-3 text-center text-gray-400">${scorer.assists !== null ? scorer.assists : '-'}</td>
+                    </tr>
+                `;
+                tbody.innerHTML += tr;
+            });
+        });
+
+        // --- دوال صفحة اللاعب ---
+        function openPlayerPage(playerId) {
+            // العثور على بيانات اللاعب من القائمة المحملة مسبقاً
+            const scorerData = currentScorers.find(s => s.player.id === playerId);
+            if (!scorerData) return;
+
+            // إخفاء الصفحات الأخرى
+            document.getElementById('top-scorers-page').classList.add('hidden');
+            document.getElementById('player-page').classList.remove('hidden');
+
+            // تعبئة البيانات الأولية (المتوفرة في القائمة)
+            document.getElementById('player-name').textContent = scorerData.player.name;
+            document.getElementById('player-goals').textContent = scorerData.goals;
+            document.getElementById('player-assists').textContent = scorerData.assists || 0;
+            document.getElementById('player-position').textContent = scorerData.player.position || 'غير محدد';
+            
+            // تعيين صورة افتراضية أو عشوائية (لأن API المجاني لا يوفر صور اللاعبين)
+            const photoIndex = playerId % 99;
+            document.getElementById('player-image').src = `https://randomuser.me/api/portraits/men/${photoIndex}.jpg`;
+
+            // تفريغ البيانات التي ستأتي من الخادم
+            document.getElementById('player-age').textContent = '...';
+            document.getElementById('player-nationality').textContent = '...';
+            document.getElementById('player-shirt-number').classList.add('hidden');
+
+            // طلب التفاصيل الإضافية من الخادم
+            socket.emit('get_player_details', playerId);
+        }
+
+        function closePlayerPage() {
+            document.getElementById('player-page').classList.add('hidden');
+            document.getElementById('top-scorers-page').classList.remove('hidden');
+        }
+
+        socket.on('player_details_response', (player) => {
+            // حساب العمر
+            if (player.dateOfBirth) {
+                const dob = new Date(player.dateOfBirth);
+                const diff = Date.now() - dob.getTime();
+                const age = Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25));
+                document.getElementById('player-age').textContent = age + ' سنة';
+            } else {
+                document.getElementById('player-age').textContent = 'غير معروف';
+            }
+
+            document.getElementById('player-nationality').textContent = player.nationality || 'غير معروف';
+            
+            if (player.shirtNumber) {
+                const shirtBadge = document.getElementById('player-shirt-number');
+                shirtBadge.textContent = player.shirtNumber;
+                shirtBadge.classList.remove('hidden');
+            }
+            
+            // تحديث المركز إذا كان أدق من الخادم
+            if (player.position) document.getElementById('player-position').textContent = player.position;
+        });
+
+        // --- دوال النافذة المنبثقة (Modal) ---
+        function openModal(matchId) {
+            const match = allMatches.find(m => m.id === matchId);
+            if (!match) return;
+
+            const modal = document.getElementById('stats-modal');
+            const content = document.getElementById('modal-content');
+            
+            // تعبئة البيانات
+            document.getElementById('modal-home-logo').src = match.homeLogo;
+            document.getElementById('modal-home-name').textContent = match.home;
+            document.getElementById('modal-away-logo').src = match.awayLogo;
+            document.getElementById('modal-away-name').textContent = match.away;
+            document.getElementById('modal-score').textContent = `${match.homeScore} - ${match.awayScore}`;
+            
+            // --- تعبئة الأحداث (Timeline) ---
+            const eventsContainer = document.getElementById('modal-events-body');
+            if (match.events && match.events.length > 0) {
+                let eventsHTML = '<div class="relative border-l-2 border-white/10 ml-4 my-4 space-y-6">';
+                match.events.forEach(event => {
+                    const isHome = event.team === 'home';
+                    
+                    let icon = '';
+                    if (event.type === 'Goal') {
+                        icon = '⚽';
+                    } else if (event.type === 'Card') {
+                        icon = event.detail === 'Yellow' ? '🟨' : '🟥';
+                    }
+
+                    const teamName = isHome ? match.home : match.away;
+                    let detailLine;
+                    if (event.type === 'Goal') {
+                        const teamLogo = isHome ? match.homeLogo : match.awayLogo;
+                        detailLine = `
+                            <div class="flex items-center gap-1.5 mt-1">
+                                <img src="${teamLogo}" class="w-4 h-4 object-contain">
+                                <span class="text-xs text-gray-400">${event.player} (${teamName})</span>
+                            </div>
+                        `;
+                    } else {
+                        detailLine = `<span class="text-xs text-gray-400 mt-1">${event.player} (${teamName})</span>`;
+                    }
+
+                    // تصميم يشبه 365scores: الوقت على الخط، والتفاصيل بجانبه
+                    eventsHTML += `
+                        <div class="relative pl-6">
+                            <!-- النقطة الزمنية -->
+                            <div class="absolute -left-[9px] top-0 bg-gray-900 border-2 border-green-500 rounded-full w-4 h-4 flex items-center justify-center"></div>
+                            
+                            <div class="flex items-center gap-3 bg-white/5 p-3 rounded-lg border border-white/5 hover:bg-white/10 transition">
+                                <span class="font-mono text-green-500 font-bold w-8 text-center border-l border-white/10 pl-2">${event.minute}'</span>
+                                <div class="text-xl">${icon}</div>
+                                <div class="flex flex-col">
+                                    <span class="text-sm font-bold text-white">${event.type === 'Goal' ? 'هدف!' : 'بطاقة ' + (event.detail === 'Yellow' ? 'صفراء' : 'حمراء')}</span>
+                                    ${detailLine}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                eventsHTML += '</div>';
+                eventsContainer.innerHTML = eventsHTML;
+            } else {
+                eventsContainer.innerHTML = '<div class="text-center text-gray-500 py-10">لا توجد أحداث مسجلة لهذه المباراة حتى الآن.</div>';
+            }
+
+            // --- تعبئة التعليق المباشر ---
+            const commentaryContainer = document.getElementById('modal-commentary-body');
+            if (match.commentary && match.commentary.length > 0) {
+                let commentaryHTML = '<div class="space-y-3 p-4">';
+                // عكس الترتيب لتظهر الأحداث الأحدث في الأعلى (الدقيقة 90) والأقدم في الأسفل (الدقيقة 1)
+                [...match.commentary].reverse().forEach(comment => {
+                    // تحديد الأيقونة واللون بناءً على نوع الحدث (حساسية بصرية)
+                    let icon = '🎙️';
+                    let borderClass = 'border-transparent';
+                    let bgClass = 'hover:bg-white/5';
+                    let textClass = 'text-gray-300';
+
+                    if (comment.type === 'Goal') {
+                        icon = '⚽';
+                        borderClass = 'border-green-500';
+                        bgClass = 'bg-green-500/10 hover:bg-green-500/20';
+                        textClass = 'text-white font-bold';
+                    } else if (comment.type === 'Card') {
+                        icon = comment.detail === 'Yellow' ? '🟨' : '🟥';
+                        borderClass = comment.detail === 'Yellow' ? 'border-yellow-500' : 'border-red-500';
+                        bgClass = comment.detail === 'Yellow' ? 'bg-yellow-500/5 hover:bg-yellow-500/10' : 'bg-red-500/5 hover:bg-red-500/10';
+                    }
+
+                    commentaryHTML += `
+                        <div class="flex items-start gap-3 text-sm p-3 rounded-lg transition-all duration-300 border-r-4 ${borderClass} ${bgClass}">
+                            <div class="flex flex-col items-center min-w-[40px]">
+                                <span class="font-mono text-green-500 font-bold text-xs">${comment.minute}'</span>
+                                <span class="text-lg mt-1 filter drop-shadow-md hover:scale-110 transition-transform cursor-default" title="${comment.type || 'تعليق'}">${icon}</span>
+                            </div>
+                            <div class="w-px bg-white/10 self-stretch"></div>
+                            <p class="${textClass} flex-1 leading-relaxed">${comment.text}</p>
+                        </div>
+                    `;
+                });
+                commentaryHTML += '</div>';
+                commentaryContainer.innerHTML = commentaryHTML;
+            } else {
+                commentaryContainer.innerHTML = '<div class="text-center text-gray-500 py-10">لا يوجد تعليق مباشر لهذه المباراة.</div>';
+            }
+
+            // تعبئة الإحصائيات
+            const statsHTML = `
+                <div class="space-y-4 mt-6">
+                    <!-- احتمالات الفوز -->
+                    <div class="mb-6 bg-white/5 p-3 rounded-lg border border-white/5">
+                        <div class="text-xs text-center text-gray-400 mb-2">احتمالات الفوز</div>
+                        <div class="flex h-4 rounded-full overflow-hidden text-[10px] font-bold text-black leading-4">
+                            <div class="bg-green-500 text-center transition-all duration-1000" style="width: ${match.probabilities.home}%">${match.probabilities.home}%</div>
+                            <div class="bg-gray-400 text-center transition-all duration-1000" style="width: ${match.probabilities.draw}%">${match.probabilities.draw}%</div>
+                            <div class="bg-blue-500 text-center transition-all duration-1000" style="width: ${match.probabilities.away}%">${match.probabilities.away}%</div>
+                        </div>
+                        <div class="flex justify-between text-[10px] text-gray-500 mt-1 px-1">
+                            <span>${match.home}</span>
+                            <span>تعادل</span>
+                            <span>${match.away}</span>
+                        </div>
+                    </div>
+
+                    <!-- الاستحواذ -->
+                    <div>
+                        <div class="flex justify-between text-sm text-gray-400 mb-1">
+                            <span>${match.statistics.homePossession}%</span>
+                            <span>الاستحواذ</span>
+                            <span>${match.statistics.awayPossession}%</span>
+                        </div>
+                        <div class="flex h-2 bg-gray-700 rounded-full overflow-hidden">
+                            <div class="bg-green-500 h-full" style="width: ${match.statistics.homePossession}%"></div>
+                            <div class="bg-blue-500 h-full" style="width: ${match.statistics.awayPossession}%"></div>
+                        </div>
+                    </div>
+
+                    <!-- التسديدات -->
+                    <div class="flex justify-between items-center border-b border-white/10 pb-2">
+                        <span class="font-bold text-xl">${match.statistics.homeShots}</span>
+                        <span class="text-sm text-gray-400">إجمالي التسديدات</span>
+                        <span class="font-bold text-xl">${match.statistics.awayShots}</span>
+                    </div>
+
+                    <!-- التسديدات على المرمى -->
+                    <div class="flex justify-between items-center border-b border-white/10 pb-2">
+                        <span class="font-bold text-xl">${match.statistics.homeOnTarget}</span>
+                        <span class="text-sm text-gray-400">تسديدات على المرمى</span>
+                        <span class="font-bold text-xl">${match.statistics.awayOnTarget}</span>
+                    </div>
+
+                    <!-- الضربات الركنية -->
+                    <div class="flex justify-between items-center border-b border-white/10 pb-2">
+                        <span class="font-bold text-xl">${match.statistics.homeCorners}</span>
+                        <span class="text-sm text-gray-400">الضربات الركنية</span>
+                        <span class="font-bold text-xl">${match.statistics.awayCorners}</span>
+                    </div>
+
+                    <!-- حالات التسلل -->
+                    <div class="flex justify-between items-center border-b border-white/10 pb-2">
+                        <span class="font-bold text-xl">${match.statistics.homeOffsides}</span>
+                        <span class="text-sm text-gray-400">حالات التسلل</span>
+                        <span class="font-bold text-xl">${match.statistics.awayOffsides}</span>
+                    </div>
+
+                    <!-- البطاقات الحمراء -->
+                    <div class="flex justify-between items-center border-b border-white/10 pb-2">
+                        <span class="font-bold text-xl text-red-500">${match.statistics.homeRedCards}</span>
+                        <span class="text-sm text-gray-400">البطاقات الحمراء</span>
+                        <span class="font-bold text-xl text-red-500">${match.statistics.awayRedCards}</span>
+                    </div>
+
+                    <!-- الهجمات -->
+                    <div class="flex justify-between items-center border-b border-white/10 pb-2">
+                        <span class="font-bold text-xl">${match.statistics.homeAttacks}</span>
+                        <span class="text-sm text-gray-400">هجمات</span>
+                        <span class="font-bold text-xl">${match.statistics.awayAttacks}</span>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('modal-stats-body').innerHTML = statsHTML;
+
+            // تعبئة التشكيلة
+            let lineupsHTML = '';
+            if (match.lineups && match.lineups.home.length > 0) {
+                // دالة مساعدة لتجميع اللاعبين حسب المركز
+                const groupPlayers = (players) => ({
+                    GK: players.filter(p => p.pos === 'GK'),
+                    DF: players.filter(p => p.pos === 'DF'),
+                    MF: players.filter(p => p.pos === 'MF'),
+                    FW: players.filter(p => p.pos === 'FW')
+                });
+
+                const home = groupPlayers(match.lineups.home);
+                const away = groupPlayers(match.lineups.away);
+
+                // دالة لرسم صف من اللاعبين
+                const renderRow = (players) => `
+                    <div class="flex justify-around w-full px-4">
+                        ${players.map(p => `
+                            <div class="flex flex-col items-center">
+                                <div class="relative">
+                                    <img src="${p.photo}" class="w-10 h-10 rounded-full border-2 border-white shadow-sm bg-gray-600 object-cover">
+                                    <span class="absolute -bottom-1 -right-1 bg-gray-900 text-white text-[10px] px-1 rounded-full border border-gray-500">${p.number}</span>
+                                </div>
+                                <span class="text-[10px] text-white font-bold mt-1 bg-black bg-opacity-50 px-1 rounded truncate max-w-[60px]">${p.name}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+
+                lineupsHTML = `
+                    <div class="relative bg-green-600 mx-auto border-4 border-white rounded-lg shadow-inner overflow-hidden" style="height: 600px; max-width: 100%; background-image: linear-gradient(0deg, transparent 49%, rgba(255,255,255,0.3) 49%, rgba(255,255,255,0.3) 51%, transparent 51%);">
+                        <!-- دائرة المنتصف -->
+                        <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-24 h-24 border-2 border-white rounded-full opacity-30"></div>
+                        
+                        <!-- الفريق الضيف (في الأعلى) -->
+                        <div class="absolute top-0 w-full h-1/2 flex flex-col justify-start pt-4 space-y-6">
+                            ${renderRow(away.GK)}
+                            ${renderRow(away.DF)}
+                            ${renderRow(away.MF)}
+                            ${renderRow(away.FW)}
+                        </div>
+
+                        <!-- الفريق المضيف (في الأسفل) -->
+                        <div class="absolute bottom-0 w-full h-1/2 flex flex-col justify-end pb-4 space-y-6">
+                            ${renderRow(home.FW)}
+                            ${renderRow(home.MF)}
+                            ${renderRow(home.DF)}
+                            ${renderRow(home.GK)}
+                        </div>
+                    </div>
+                `;
+            } else {
+                lineupsHTML = '<div class="text-center text-gray-500 py-10">التشكيلة غير متوفرة لهذه المباراة</div>';
+            }
+            document.getElementById('modal-lineups-body').innerHTML = lineupsHTML;
+
+            // إعادة تعيين التبويب الافتراضي
+            switchTab('stats');
+            // إظهار النافذة
+            modal.classList.remove('hidden');
+        }
+
+        // --- دالة العداد التنازلي ---
+        function updateCountdowns() {
+            const timers = document.querySelectorAll('.countdown-timer');
+            const now = new Date().getTime();
+
+            timers.forEach(timer => {
+                const matchTime = new Date(timer.getAttribute('data-timestamp')).getTime();
+                const distance = matchTime - now;
+
+                if (distance < 0) {
+                    timer.innerHTML = "جاري البدء...";
+                    return;
+                }
+
+                const days = Math.floor(distance / (1000 * 60 * 60 * 24));
+                const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+                const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+
+                if (days > 0) {
+                    timer.innerHTML = `${days} يوم ${hours} ساعة`;
+                } else {
+                    timer.innerHTML = `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                }
+            });
+        }
+
+        // تشغيل العداد كل ثانية
+        setInterval(updateCountdowns, 1000);
+
+        function closeModal() {
+            document.getElementById('stats-modal').classList.add('hidden');
+        }
+
+        function switchTab(tabName) {
+            const statsBody = document.getElementById('modal-stats-body');
+            const lineupsBody = document.getElementById('modal-lineups-body');
+            const tabStats = document.getElementById('tab-stats');
+            const tabEvents = document.getElementById('tab-events');
+            const tabCommentary = document.getElementById('tab-commentary');
+            const tabLineups = document.getElementById('tab-lineups');
+
+            if (tabName === 'stats') {
+                statsBody.classList.remove('hidden');
+                lineupsBody.classList.add('hidden');
+                tabStats.className = "flex-1 py-2 text-center text-green-400 border-b-2 border-green-400 font-bold transition cursor-pointer bg-white/5";
+                tabLineups.className = "flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5";
+                if(tabEvents) tabEvents.className = "flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5";
+                if(tabCommentary) tabCommentary.className = "flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5";
+                document.getElementById('modal-events-body').classList.add('hidden');
+                document.getElementById('modal-commentary-body').classList.add('hidden');
+            } else if (tabName === 'lineups') {
+                statsBody.classList.add('hidden');
+                lineupsBody.classList.remove('hidden');
+                tabStats.className = "flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5";
+                tabLineups.className = "flex-1 py-2 text-center text-green-400 border-b-2 border-green-400 font-bold transition cursor-pointer bg-white/5";
+                if(tabEvents) tabEvents.className = "flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5";
+                if(tabCommentary) tabCommentary.className = "flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5";
+                document.getElementById('modal-events-body').classList.add('hidden');
+                document.getElementById('modal-commentary-body').classList.add('hidden');
+            } else if (tabName === 'events') {
+                statsBody.classList.add('hidden');
+                lineupsBody.classList.add('hidden');
+                document.getElementById('modal-events-body').classList.remove('hidden');
+                document.getElementById('modal-commentary-body').classList.add('hidden');
+                
+                tabStats.className = "flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5";
+                tabLineups.className = "flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5";
+                if(tabEvents) tabEvents.className = "flex-1 py-2 text-center text-green-400 border-b-2 border-green-400 font-bold transition cursor-pointer bg-white/5";
+                if(tabCommentary) tabCommentary.className = "flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5";
+            } else if (tabName === 'commentary') {
+                statsBody.classList.add('hidden');
+                lineupsBody.classList.add('hidden');
+                document.getElementById('modal-events-body').classList.add('hidden');
+                document.getElementById('modal-commentary-body').classList.remove('hidden');
+
+                tabStats.className = "flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5";
+                tabLineups.className = "flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5";
+                if(tabEvents) tabEvents.className = "flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5";
+                if(tabCommentary) tabCommentary.className = "flex-1 py-2 text-center text-green-400 border-b-2 border-green-400 font-bold transition cursor-pointer bg-white/5";
+            }
+        }
+
+        function setFilter(filter) {
+            currentFilter = filter;
+            
+            // تحديث ألوان الأزرار
+            const tabs = ['ALL', 'LIVE', 'FT', 'UPCOMING'];
+            tabs.forEach(t => {
+                const btn = document.getElementById('tab-' + t.toLowerCase());
+                if (t === filter) {
+                    btn.className = "px-4 py-2 rounded-lg bg-green-600 text-white font-bold transition shadow-lg shadow-green-900/20";
+                } else {
+                    btn.className = "px-4 py-2 rounded-lg bg-white/5 border border-white/5 text-gray-300 hover:bg-white/10 transition backdrop-blur-sm";
+                }
+            });
+
+            renderMatches();
+        }
+
+        // إرسال حدث تغيير الدوري للخادم
+        leagueSelector.addEventListener('change', (event) => {
+            const newLeague = event.target.value;
+            localStorage.setItem('selectedLeague', newLeague); // حفظ الاختيار في المتصفح
+            console.log(`تغيير الدوري إلى: ${newLeague}`);
+            socket.emit('change_league', newLeague);
+            container.innerHTML = '<div class="text-center text-gray-500 col-span-full">جاري تحميل بيانات الدوري الجديد...</div>';
+        });
+    </script>
+
+    <!-- هيكل النافذة المنبثقة (Modal) -->
+    <div id="stats-modal" class="fixed inset-0 bg-black bg-opacity-80 hidden flex items-center justify-center z-50 backdrop-blur-sm" onclick="closeModal()">
+        <div class="bg-gray-900/95 backdrop-blur-xl rounded-2xl w-full max-w-lg p-6 m-4 shadow-2xl border border-white/10 transform transition-all scale-100" onclick="event.stopPropagation()">
+            
+            <!-- رأس النافذة -->
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-lg font-bold text-green-400">تفاصيل المباراة</h3>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-white text-2xl">&times;</button>
+            </div>
+
+            <!-- تفاصيل الفريقين والنتيجة -->
+            <div class="flex justify-between items-center mb-8">
+                <div class="text-center w-1/3">
+                    <img id="modal-home-logo" class="w-16 h-16 mx-auto mb-2 object-contain">
+                    <div id="modal-home-name" class="font-bold text-sm"></div>
+                </div>
+                <div class="text-center w-1/3">
+                    <div id="modal-score" class="text-4xl font-black tracking-widest"></div>
+                </div>
+                <div class="text-center w-1/3">
+                    <img id="modal-away-logo" class="w-16 h-16 mx-auto mb-2 object-contain">
+                    <div id="modal-away-name" class="font-bold text-sm"></div>
+                </div>
+            </div>
+
+            <!-- التبويبات -->
+            <div class="flex mb-4 border-b border-white/10">
+                <div id="tab-stats" onclick="switchTab('stats')" class="flex-1 py-2 text-center text-green-400 border-b-2 border-green-400 font-bold transition cursor-pointer bg-white/5">الإحصائيات</div>
+                <div id="tab-events" onclick="switchTab('events')" class="flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5">الأحداث</div>
+                <div id="tab-commentary" onclick="switchTab('commentary')" class="flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5">التعليق المباشر</div>
+                <div id="tab-lineups" onclick="switchTab('lineups')" class="flex-1 py-2 text-center text-gray-400 hover:text-white transition cursor-pointer hover:bg-white/5">التشكيلة</div>
+            </div>
+
+            <!-- جسم الإحصائيات -->
+            <div id="modal-stats-body"></div>
+            <!-- جسم الأحداث -->
+            <div id="modal-events-body" class="hidden overflow-y-auto max-h-[70vh]"></div>
+            <!-- جسم التعليق المباشر -->
+            <div id="modal-commentary-body" class="hidden overflow-y-auto max-h-[70vh]"></div>
+            <!-- جسم التشكيلة -->
+            <div id="modal-lineups-body" class="hidden overflow-y-auto max-h-[70vh]"></div>
+        </div>
+    </div>
+</body>
+</html>
